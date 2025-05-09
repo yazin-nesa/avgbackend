@@ -8,6 +8,7 @@ const { protect, authorize, ErrorResponse } = require('../middleware');
 // @access  Private/Admin
 router.get('/', protect, authorize('admin', 'hr'), async (req, res, next) => {
   try {
+  console.log("fetching users :", req.query)
     const page = parseInt(req.query.page, 10) || 1;
     const limit = parseInt(req.query.limit, 10) || 10;
     const startIndex = (page - 1) * limit;
@@ -28,6 +29,7 @@ router.get('/', protect, authorize('admin', 'hr'), async (req, res, next) => {
     // Filter by role
     if (req.query.role) {
       query.role = req.query.role;
+      console.log("role is ",query.role)
     }
 
     // Filter by branch
@@ -39,13 +41,14 @@ router.get('/', protect, authorize('admin', 'hr'), async (req, res, next) => {
     if (req.query.status) {
       query.status = req.query.status;
     }
-
+console.log("query", query)
     const users = await User.find(query)
       .select('-password')
       .populate('branch', 'name')
       .skip(startIndex)
       .limit(limit)
       .sort({ createdAt: -1 });
+      console.log("users", users)
 
     // Pagination result
     const pagination = {};
@@ -68,7 +71,7 @@ router.get('/', protect, authorize('admin', 'hr'), async (req, res, next) => {
       success: true,
       count: users.length,
       pagination,
-      data: users
+      userdata: users
     });
   } catch (error) {
     next(error);
