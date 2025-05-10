@@ -4,6 +4,7 @@ const Vehicle = require('./Vehicle');
 const Service = require('./Service');
 const Complaint = require('./Complaint');
 const Settings = require('./Settings');
+const ServiceType = require('./ServiceType');
 
 module.exports = {
   User,
@@ -11,5 +12,6 @@ module.exports = {
   Vehicle,
   Service,
   Complaint,
+  ServiceType,
   Settings
 }; 

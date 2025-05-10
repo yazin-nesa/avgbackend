@@ -31,6 +31,42 @@ const userSchema = new mongoose.Schema({
     enum: ['admin', 'manager', 'staff', 'hr'],
     default: 'staff'
   },
+  // Replace department with serviceCapabilities
+  serviceCapabilities: [{
+    serviceType: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'ServiceType',
+      required: true
+    },
+    skillLevel: {
+      type: Number,
+      min: 1,
+      max: 5,
+      default: 1
+    },
+    certified: {
+      type: Boolean,
+      default: false
+    },
+    totalCreditsEarned: {
+      type: Number,
+      default: 0
+    },
+    completedServices: {
+      type: Number,
+      default: 0
+    }
+  }],
+  totalCreditPoints: {
+    type: Number,
+    default: 0
+  },
+  // Keep a category field for filtering purposes
+  primaryServiceCategory: {
+    type: String,
+    enum: ['routine_maintenance', 'repair', 'inspection', 'body_work', 'washing', 'other', 'administration'],
+    default: 'administration'
+  },
   phone: {
     type: String,
     trim: true
@@ -38,7 +74,7 @@ const userSchema = new mongoose.Schema({
   branch: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Branch',
-    // required: [true, 'Branch is required']
+    required: [true, 'Branch is required']
   },
   status: {
     type: String,
@@ -74,11 +110,26 @@ userSchema.methods.comparePassword = async function(candidatePassword) {
   }
 };
 
+// Method to add credit points for a service
+userSchema.methods.addServiceCredits = async function(serviceTypeId, creditsEarned) {
+  const serviceCapabilityIndex = this.serviceCapabilities.findIndex(
+    cap => cap.serviceType.toString() === serviceTypeId.toString()
+  );
+  
+  if (serviceCapabilityIndex !== -1) {
+    this.serviceCapabilities[serviceCapabilityIndex].totalCreditsEarned += creditsEarned;
+    this.serviceCapabilities[serviceCapabilityIndex].completedServices += 1;
+  }
+  
+  this.totalCreditPoints += creditsEarned;
+  await this.save();
+};
+
 // Virtual for full name
-//userSchema.virtual('fullName').get(function() {
-//  return `${this.firstName} ${this.lastName}`;
-//});
+userSchema.virtual('fullName').get(function() {
+  return `${this.firstName} ${this.lastName}`;
+});
 
 const User = mongoose.model('User', userSchema);
 
-module.exports = User; 
+module.exports = User;
