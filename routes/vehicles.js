@@ -137,7 +137,7 @@ router.put('/:id', protect, async (req, res, next) => {
     if (req.user.role !== 'admin' && vehicle.branch.toString() !== req.user.branch.toString()) {
       return next(new ErrorResponse('Not authorized to update this vehicle', 403));
     }
-
+    console.log("req.body : ", req.body)
     vehicle = await Vehicle.findByIdAndUpdate(req.params.id, req.body, {
       new: true,
       runValidators: true
