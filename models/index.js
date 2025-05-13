@@ -5,7 +5,7 @@ const Service = require('./Service');
 const Complaint = require('./Complaint');
 const Settings = require('./Settings');
 const ServiceType = require('./ServiceType');
-
+const Designations = require('./DesignationCategoryMap')
 module.exports = {
   User,
   Branch,
@@ -13,5 +13,6 @@ module.exports = {
   Service,
   Complaint,
   ServiceType,
-  Settings
+  Settings,
+  Designations
 }; 

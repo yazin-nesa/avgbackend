@@ -1,7 +1,24 @@
 const express = require('express');
 const router = express.Router();
-const { User, ServiceType } = require('../models');
+const { User, ServiceType, Designation } = require('../models');
 const { protect, authorize, ErrorResponse } = require('../middleware');
+const multer = require('multer');
+const XLSX = require('xlsx');
+
+// Set up multer storage
+const storage = multer.memoryStorage();
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+      file.mimetype === 'application/vnd.ms-excel') {
+      cb(null, true);
+    } else {
+      cb(new Error('Only Excel files are allowed'), false);
+    }
+  }
+});
 
 // @desc    Get all users
 // @route   GET /api/v1/users
@@ -15,6 +32,7 @@ router.get('/', protect, authorize('admin', 'hr', 'manager'), async (req, res, n
     const total = await User.countDocuments();
 
     const query = {};
+  
 
     // Search by name or email
     if (req.query.search) {
@@ -409,5 +427,425 @@ router.get('/:id/service-stats', protect, authorize('admin', 'hr', 'manager'), a
     next(error);
   }
 });
+
+
+// @desc    Bulk upload users from Excel
+// @route   POST /api/v1/users/bulk-upload
+// @access  Private/Admin/HR
+router.post('/bulk-upload', protect, authorize('admin', 'hr'), upload.single('file'), async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return next(new ErrorResponse('Please upload an Excel file', 400));
+    }
+
+    // Read the Excel file
+    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+    const data = XLSX.utils.sheet_to_json(worksheet);
+
+    // Default branch ID (you may want to pass this as a parameter)
+    const defaultBranchId = req.body.branchId;
+    if (!defaultBranchId) {
+      return next(new ErrorResponse('Please provide a default branch ID', 400));
+    }
+
+    // Verify if the branch exists
+    const branch = await Branch.findById(defaultBranchId);
+    if (!branch) {
+      return next(new ErrorResponse(`Branch not found with id of ${defaultBranchId}`, 404));
+    }
+
+    const results = {
+      successful: [],
+      failed: []
+    };
+
+    // Process each row
+    for (const row of data) {
+      try {
+        // Generate username and password
+        const username = (row.Name.substring(0, 3).toLowerCase() + row.ID).replace(/\s+/g, '');
+        const password = `AVG${row.ID}`;
+
+        // Map Excel columns to user schema
+        const userData = {
+          firstName: row.Name.split(' ')[0],
+          lastName: row.Name.split(' ').slice(1).join(' '),
+          email: `${username}@yourdomain.com`, // You might want to use a real email pattern
+          password,
+          branch: defaultBranchId,
+          role: 'staff', // Default role
+          status: 'active',
+          phone: '', // Not provided in Excel
+        };
+
+        // Set service-related fields based on designation
+        userData.primaryServiceCategory = mapDepartmentToCategory(row.Department);
+
+        // Check if user already exists (by ID or email)
+        const existingUser = await User.findOne({
+          $or: [
+            { email: userData.email }
+          ]
+        });
+
+        let user;
+        if (existingUser) {
+          // Update existing user
+          user = await User.findByIdAndUpdate(existingUser._id, userData, {
+            new: true,
+            runValidators: true
+          });
+          results.successful.push({ id: row.ID, name: row.Name, action: 'updated' });
+        } else {
+          // Create new user
+          user = await User.create(userData);
+          results.successful.push({ id: row.ID, name: row.Name, action: 'created' });
+        }
+      } catch (error) {
+        results.failed.push({
+          id: row.ID,
+          name: row.Name,
+          error: error.message
+        });
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        total: data.length,
+        successful: results.successful.length,
+        failed: results.failed.length,
+        details: results
+      }
+    });
+
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Helper function to map department to service category
+function mapDepartmentToCategory(department) {
+  // Map department to category
+  switch (department.toUpperCase()) {
+    case 'SERVICE':
+      return 'routine_maintenance';
+    case 'SALES':
+      return 'administration';
+    case 'PARTS':
+      return 'repair';
+    default:
+      return 'administration';
+  }
+}
+
+router.get('/staff-performance', protect, authorize('admin','hr'), async (req, res, next) => {
+  try {
+      // Optional filters
+      const branchId = req.query.branchId;
+      const dateRange = {
+          start: req.query.startDate ? new Date(req.query.startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+          end: req.query.endDate ? new Date(req.query.endDate) : new Date()
+      };
+
+      // Base query
+      const query = { role: 'staff' };
+      if (branchId) query.branch = branchId;
+
+      // Get all technical staff
+      const staffMembers = await User.find(query)
+          .populate('branch', 'name')
+          .select('-password');
+
+      // Array to store staff performance data
+      const staffPerformance = [];
+
+      // For each staff member, get their performance metrics
+      for (const staff of staffMembers) {
+          // Find all services where this staff member was a technician
+          const servicesQuery = {
+              'serviceItems.technicians.technician': staff._id,
+              createdAt: { $gte: dateRange.start, $lte: dateRange.end }
+          };
+
+          // Services where staff participated
+          const services = await Service.find(servicesQuery)
+              .populate('serviceItems.serviceType', 'name category creditPoints')
+              .populate('branch', 'name');
+
+          // Initialize counters
+          let totalServiceItems = 0;
+          let completedServiceItems = 0;
+          let totalLaborHours = 0;
+          let totalCreditPointsEarned = 0;
+          let serviceRevenue = 0;
+          const serviceTypeBreakdown = {};
+
+          // Process all services to extract staff performance metrics
+          for (const service of services) {
+              for (const serviceItem of service.serviceItems) {
+                  // Check if this staff member is assigned to this service item
+                  const techInfo = serviceItem.technicians.find(
+                      tech => tech.technician.toString() === staff._id.toString()
+                  );
+
+                  if (techInfo) {
+                      // Count total service items
+                      totalServiceItems++;
+
+                      // Count completed service items
+                      if (serviceItem.status === 'completed') {
+                          completedServiceItems++;
+
+                          // Add labor hours and credit points
+                          totalLaborHours += serviceItem.laborHours;
+                          totalCreditPointsEarned += techInfo.creditPoints || 0;
+
+                          // Calculate revenue contribution (divide by number of technicians)
+                          const technicianCount = serviceItem.technicians.length;
+                          const laborRevenue = serviceItem.laborCost / technicianCount;
+                          serviceRevenue += laborRevenue;
+
+                          // Update service type breakdown
+                          const serviceTypeName = serviceItem.serviceType.name;
+                          if (!serviceTypeBreakdown[serviceTypeName]) {
+                              serviceTypeBreakdown[serviceTypeName] = {
+                                  count: 0,
+                                  revenue: 0,
+                                  creditPoints: 0,
+                                  category: serviceItem.serviceType.category
+                              };
+                          }
+
+                          serviceTypeBreakdown[serviceTypeName].count++;
+                          serviceTypeBreakdown[serviceTypeName].revenue += laborRevenue;
+                          serviceTypeBreakdown[serviceTypeName].creditPoints += techInfo.creditPoints || 0;
+                      }
+                  }
+              }
+          }
+
+          // Calculate average service times if possible
+          const completedServicesWithTimes = await Service.aggregate([
+              {
+                  $match: {
+                      'serviceItems.technicians.technician': new mongoose.Types.ObjectId(staff._id),
+                      'serviceItems.status': 'completed',
+                      'serviceItems.startTime': { $exists: true },
+                      'serviceItems.completionTime': { $exists: true },
+                      createdAt: { $gte: dateRange.start, $lte: dateRange.end }
+                  }
+              },
+              { $unwind: '$serviceItems' },
+              {
+                  $match: {
+                      'serviceItems.status': 'completed',
+                      'serviceItems.startTime': { $exists: true },
+                      'serviceItems.completionTime': { $exists: true }
+                  }
+              },
+              {
+                  $addFields: {
+                      containsTechnician: {
+                          $in: [
+                              new mongoose.Types.ObjectId(staff._id),
+                              '$serviceItems.technicians.technician'
+                          ]
+                      },
+                      completionTime: {
+                          $divide: [
+                              { $subtract: ['$serviceItems.completionTime', '$serviceItems.startTime'] },
+                              3600000 // Convert ms to hours
+                          ]
+                      }
+                  }
+              },
+              {
+                  $match: {
+                      containsTechnician: true
+                  }
+              },
+              {
+                  $group: {
+                      _id: null,
+                      avgCompletionTime: { $avg: '$completionTime' },
+                      minCompletionTime: { $min: '$completionTime' },
+                      maxCompletionTime: { $max: '$completionTime' },
+                      count: { $sum: 1 }
+                  }
+              }
+          ]);
+
+          // Look for service quality indicators in complaints
+          const relatedComplaints = await Complaint.countDocuments({
+              $or: [
+                  { 'assignedTo': staff._id },
+                  { 'resolution.resolvedBy': staff._id }
+              ],
+              createdAt: { $gte: dateRange.start, $lte: dateRange.end }
+          });
+
+          // Get average satisfaction rating if available
+          const satisfactionMetrics = await Complaint.aggregate([
+              {
+                  $match: {
+                      'resolution.resolvedBy': new mongoose.Types.ObjectId(staff._id),
+                      'resolution.feedback.rating': { $exists: true },
+                      createdAt: { $gte: dateRange.start, $lte: dateRange.end }
+                  }
+              },
+              {
+                  $group: {
+                      _id: null,
+                      avgRating: { $avg: '$resolution.feedback.rating' },
+                      count: { $sum: 1 }
+                  }
+              }
+          ]);
+
+          // Calculate completion rate
+          const completionRate = totalServiceItems > 0
+              ? (completedServiceItems / totalServiceItems) * 100
+              : 0;
+
+          // Calculate productivity metrics
+          const productivityPerHour = totalLaborHours > 0
+              ? serviceRevenue / totalLaborHours
+              : 0;
+
+          // Format service type breakdown as array
+          const serviceTypesArray = Object.keys(serviceTypeBreakdown).map(name => ({
+              name,
+              ...serviceTypeBreakdown[name]
+          }));
+
+          // Add staff performance data to array
+          staffPerformance.push({
+              _id: staff._id,
+              name: `${staff.firstName} ${staff.lastName}`,
+              email: staff.email,
+              branch: staff.branch,
+              totalCreditPoints: staff.totalCreditPoints,
+              period: {
+                  serviceItems: {
+                      total: totalServiceItems,
+                      completed: completedServiceItems,
+                      completionRate: completionRate.toFixed(2)
+                  },
+                  laborHours: totalLaborHours.toFixed(2),
+                  creditPointsEarned: totalCreditPointsEarned,
+                  revenue: serviceRevenue.toFixed(2),
+                  productivity: {
+                      revenuePerHour: productivityPerHour.toFixed(2)
+                  },
+                  serviceTimeMetrics: completedServicesWithTimes.length > 0 ? {
+                      average: completedServicesWithTimes[0].avgCompletionTime.toFixed(2),
+                      minimum: completedServicesWithTimes[0].minCompletionTime.toFixed(2),
+                      maximum: completedServicesWithTimes[0].maxCompletionTime.toFixed(2),
+                      count: completedServicesWithTimes[0].count
+                  } : null,
+                  serviceTypes: serviceTypesArray.sort((a, b) => b.count - a.count),
+                  customerSatisfaction: satisfactionMetrics.length > 0 ? {
+                      averageRating: satisfactionMetrics[0].avgRating.toFixed(2),
+                      ratingsCount: satisfactionMetrics[0].count
+                  } : null,
+                  complaints: relatedComplaints
+              }
+          });
+      }
+
+      // Sort staff by productivity (revenue per hour)
+      staffPerformance.sort((a, b) =>
+          parseFloat(b.period.productivity.revenuePerHour) - parseFloat(a.period.productivity.revenuePerHour)
+      );
+
+      // Calculate staff specializations by service category
+      const staffSpecializations = await User.aggregate([
+          { $match: { role: 'staff' } },
+          { $unwind: '$serviceCapabilities' },
+          {
+              $lookup: {
+                  from: 'servicetypes',
+                  localField: 'serviceCapabilities.serviceType',
+                  foreignField: '_id',
+                  as: 'serviceTypeInfo'
+              }
+          },
+          { $unwind: '$serviceTypeInfo' },
+          {
+              $group: {
+                  _id: {
+                      category: '$serviceTypeInfo.category',
+                      branchId: '$branch'
+                  },
+                  staffCount: { $addToSet: '$_id' },
+                  avgSkillLevel: { $avg: '$serviceCapabilities.skillLevel' }
+              }
+          },
+          {
+              $lookup: {
+                  from: 'branches',
+                  localField: '_id.branchId',
+                  foreignField: '_id',
+                  as: 'branchInfo'
+              }
+          },
+          { $unwind: '$branchInfo' },
+          {
+              $project: {
+                  _id: 0,
+                  category: '$_id.category',
+                  branchId: '$_id.branchId',
+                  branchName: '$branchInfo.name',
+                  staffCount: { $size: '$staffCount' },
+                  avgSkillLevel: { $round: ['$avgSkillLevel', 2] }
+              }
+          },
+          { $sort: { staffCount: -1 } }
+      ]);
+
+      res.status(200).json({
+          success: true,
+          data: {
+              dateRange,
+              staffPerformance,
+              staffSpecializations,
+              topPerformers: {
+                  byRevenue: staffPerformance
+                      .sort((a, b) => parseFloat(b.period.revenue) - parseFloat(a.period.revenue))
+                      .slice(0, 5)
+                      .map(staff => ({
+                          name: staff.name,
+                          branchName: staff.branch?.name,
+                          revenue: staff.period.revenue
+                      })),
+                  byCompletionRate: staffPerformance
+                      .filter(staff => staff.period.serviceItems.total >= 5) // Minimum threshold
+                      .sort((a, b) => parseFloat(b.period.serviceItems.completionRate) - parseFloat(a.period.serviceItems.completionRate))
+                      .slice(0, 5)
+                      .map(staff => ({
+                          name: staff.name,
+                          branchName: staff.branch?.name,
+                          completionRate: staff.period.serviceItems.completionRate,
+                          totalServices: staff.period.serviceItems.total
+                      })),
+                  byCreditsEarned: staffPerformance
+                      .sort((a, b) => b.period.creditPointsEarned - a.period.creditPointsEarned)
+                      .slice(0, 5)
+                      .map(staff => ({
+                          name: staff.name,
+                          branchName: staff.branch?.name,
+                          creditPoints: staff.period.creditPointsEarned
+                      }))
+              }
+          }
+      });
+  } catch (error) {
+      next(error);
+  }
+});
+
 
 module.exports = router;

@@ -31,7 +31,13 @@ const userSchema = new mongoose.Schema({
     enum: ['admin', 'manager', 'staff', 'hr'],
     default: 'staff'
   },
-  // Replace department with serviceCapabilities
+  // Added staff designation for incentive policy application
+  designation: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Designations',
+    required: [true, 'Staff designation is required']
+  },
+  // Service capabilities
   serviceCapabilities: [{
     serviceType: {
       type: mongoose.Schema.Types.ObjectId,
@@ -63,9 +69,7 @@ const userSchema = new mongoose.Schema({
   },
   // Keep a category field for filtering purposes
   primaryServiceCategory: {
-    type: String,
-    enum: ['routine_maintenance', 'repair', 'inspection', 'body_work', 'washing', 'other', 'administration'],
-    default: 'administration'
+    type: String
   },
   phone: {
     type: String,
@@ -83,7 +87,53 @@ const userSchema = new mongoose.Schema({
   },
   lastLogin: {
     type: Date
-  }
+  },
+  // Added salary information for incentive calculations
+  salary: {
+    base: {
+      type: Number,
+      required: [true, 'Base salary is required'],
+      min: 0
+    },
+    currency: {
+      type: String,
+      default: 'USD'
+    },
+    paymentFrequency: {
+      type: String,
+      enum: ['weekly', 'biweekly', 'monthly'],
+      default: 'monthly'
+    },
+    effectiveDate: {
+      type: Date,
+      default: Date.now
+    }
+  },
+  // Salary and incentive history
+  paymentHistory: [{
+    period: {
+      month: Number,
+      year: Number,
+      startDate: Date,
+      endDate: Date
+    },
+    salary: {
+      amount: Number,
+      currency: String
+    },
+    incentives: [{
+      policy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'IncentivePolicy'
+      },
+      amount: Number,
+      calculationDetails: mongoose.Schema.Types.Mixed
+    }],
+    totalIncentive: Number,
+    totalPay: Number,
+    paymentDate: Date,
+    paymentReference: String
+  }]
 }, {
   timestamps: true
 });
@@ -129,6 +179,52 @@ userSchema.methods.addServiceCredits = async function(serviceTypeId, creditsEarn
 userSchema.virtual('fullName').get(function() {
   return `${this.firstName} ${this.lastName}`;
 });
+
+// Method to get incentive payments for a specific period
+userSchema.methods.getIncentivesForPeriod = async function(month, year) {
+  const IncentivePayment = mongoose.model('IncentivePayment');
+  
+  return await IncentivePayment.find({
+    user: this._id,
+    'period.month': month,
+    'period.year': year
+  }).populate('policy');
+};
+
+// Method to update payment history with new salary and incentives
+userSchema.methods.updatePaymentHistory = async function(paymentData) {
+  // Check if entry already exists for this period
+  const existingEntryIndex = this.paymentHistory.findIndex(
+    entry => entry.period.month === paymentData.period.month && 
+            entry.period.year === paymentData.period.year
+  );
+  
+  if (existingEntryIndex !== -1) {
+    // Update existing entry
+    this.paymentHistory[existingEntryIndex] = {
+      ...this.paymentHistory[existingEntryIndex],
+      ...paymentData,
+      // Recalculate totals
+      totalIncentive: paymentData.incentives.reduce((sum, inc) => sum + inc.amount, 0),
+      totalPay: paymentData.salary.amount + 
+                paymentData.incentives.reduce((sum, inc) => sum + inc.amount, 0)
+    };
+  } else {
+    // Add new entry
+    this.paymentHistory.push({
+      ...paymentData,
+      totalIncentive: paymentData.incentives.reduce((sum, inc) => sum + inc.amount, 0),
+      totalPay: paymentData.salary.amount + 
+                paymentData.incentives.reduce((sum, inc) => sum + inc.amount, 0)
+    });
+  }
+  
+  return await this.save();
+};
+
+// Additional indexes
+userSchema.index({ designation: 1 });
+userSchema.index({ 'paymentHistory.period.month': 1, 'paymentHistory.period.year': 1 });
 
 const User = mongoose.model('User', userSchema);
 

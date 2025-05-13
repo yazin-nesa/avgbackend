@@ -8,6 +8,7 @@ const { protect, authorize, ErrorResponse } = require('../middleware');
 // @access  Private
 router.get('/', protect, async (req, res, next) => {
   try {
+    console.log("fetching all complaints")
     const page = parseInt(req.query.page, 10) || 1;
     const limit = parseInt(req.query.limit, 10) || 10;
     const startIndex = (page - 1) * limit;
@@ -41,7 +42,11 @@ router.get('/', protect, async (req, res, next) => {
 
     // Filter by status
     if (req.query.status) {
-      query.status = req.query.status;
+      if (req.query.status == "all") {
+
+      } else {
+        query.status = req.query.status;
+      }
     }
 
     // Filter by date range
@@ -51,6 +56,7 @@ router.get('/', protect, async (req, res, next) => {
         $lte: new Date(req.query.endDate)
       };
     }
+
 
     const complaints = await Complaint.find(query)
       .populate('filedBy', 'firstName lastName')
