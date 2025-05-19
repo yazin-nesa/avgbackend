@@ -10,8 +10,10 @@ const vehicles = require('./vehicles');
 const services = require('./services');
 const complaints = require('./complaints');
 const settings = require('./settings');
-const serviceTypeRoutes = require('./servicetype')
-const adminanalytics = require('./adminAnalytics')
+const serviceTypeRoutes = require('./servicetype');
+const adminanalytics = require('./adminAnalytics');
+const incentivepolicies = require('./incentiveRoutes');
+const staffCategoryroute = require('./staffCategory');
 
 // Mount routes
 router.use('/auth', auth);
@@ -23,6 +25,8 @@ router.use('/service-types', serviceTypeRoutes);
 router.use('/services', services);
 router.use('/complaints', complaints);
 router.use('/settings', settings);
-router.use('/admin/analytics', adminanalytics)
+router.use('/admin/analytics', adminanalytics);
+router.use('/incentivepolicies',incentivepolicies);
+router.use('/staffcategories',staffCategoryroute);
 
 module.exports = router; 

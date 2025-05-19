@@ -69,7 +69,9 @@ const userSchema = new mongoose.Schema({
   },
   // Keep a category field for filtering purposes
   primaryServiceCategory: {
-    type: String
+    type: mongoose.Schema.Types.ObjectId,
+      ref: 'StaffCategory',
+      required: true
   },
   phone: {
     type: String,

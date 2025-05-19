@@ -5,7 +5,11 @@ const Service = require('./Service');
 const Complaint = require('./Complaint');
 const Settings = require('./Settings');
 const ServiceType = require('./ServiceType');
-const Designations = require('./DesignationCategoryMap')
+const Designations = require('./DesignationCategoryMap');
+const IncentivePolicy = require('./IncentivePolicy');
+const StaffCategory = require('./StaffCategory');
+const MonthlySalary = require('./MonthlySalary');
+const MonthlyTarget = require('./MonthlyTarget');
 module.exports = {
   User,
   Branch,
@@ -14,5 +18,9 @@ module.exports = {
   Complaint,
   ServiceType,
   Settings,
-  Designations
+  Designations,
+  IncentivePolicy,
+  StaffCategory,
+  MonthlySalary,
+  MonthlyTarget,
 }; 
